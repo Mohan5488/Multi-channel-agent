@@ -1,0 +1,219 @@
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from django.http import StreamingHttpResponse
+from src.agent.graph import run_workflow_api, resume_workflow_api #run_workflow_streaming, resume_workflow_streaming
+import uuid
+import json
+import time
+
+class PromptInputView(APIView):
+    def post(self, request):
+        """
+        Start a new workflow or continue an existing one.
+        """
+        data = request.data
+        user_prompt = data.get("user_prompt")
+        thread_id = request.query_params.get('thread_id', str(uuid.uuid4()))
+
+        if not user_prompt:
+            return Response(
+                {"error": "user_prompt is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            result = run_workflow_api(user_prompt, thread_id)
+            
+            # Check if workflow was interrupted
+            if result.get("status") == "interrupt":
+                return Response({
+                    "status": "interrupt",
+                    "message": "Workflow interrupted - human input required",
+                    "interrupt": result.get("interrupt"),
+                    "thread_id": thread_id,
+                    "state": result.get("state")
+                }, status=status.HTTP_202_ACCEPTED)
+            
+            # Workflow completed successfully
+            res = result.get("result", {})
+            if res:
+                return Response({
+                    "status": res.get("status", "success"),
+                    "message": res.get("message", "Workflow completed"),
+                    "thread_id": thread_id,
+                    "result": res
+                })
+            else:
+                return Response({
+                    "status": "completed",
+                    "message": "Workflow completed",
+                    "thread_id": thread_id,
+                    "state": result
+                })
+                
+        except Exception as e:
+            return Response(
+                {"error": f"Workflow failed: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class ResumeWorkflowView(APIView):
+    def post(self, request):
+        """
+        Resume a workflow after providing human feedback.
+        """
+        data = request.data
+        user_feedback = data.get("feedback")
+        thread_id = request.query_params.get('thread_id')
+
+        if not user_feedback:
+            return Response(
+                {"error": "feedback is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not thread_id:
+            return Response(
+                {"error": "thread_id is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            result = resume_workflow_api(user_feedback, thread_id)
+            
+            # Check if workflow was interrupted again
+            if result.get("status") == "interrupt":
+                return Response({
+                    "status": "interrupt",
+                    "message": "Workflow interrupted again - additional input required",
+                    "interrupt": result.get("interrupt"),
+                    "thread_id": thread_id,
+                    "state": result.get("state")
+                }, status=status.HTTP_202_ACCEPTED)
+            
+            # Workflow completed successfully
+            res = result.get("result", {})
+            if res:
+                return Response({
+                    "status": res.get("status", "success"),
+                    "message": res.get("message", "Workflow completed"),
+                    "thread_id": thread_id,
+                    "result": res
+                })
+            else:
+                return Response({
+                    "status": "completed",
+                    "message": "Workflow completed",
+                    "thread_id": thread_id,
+                    "state": result
+                })
+                
+        except Exception as e:
+            return Response(
+                {"error": f"Workflow resume failed: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+# class StreamingWorkflowView(APIView):
+#     def post(self, request):
+#         """
+#         Start a streaming workflow with real-time updates via Server-Sent Events.
+#         """
+#         data = request.data
+#         user_prompt = data.get("user_prompt")
+#         thread_id = request.query_params.get('thread_id', str(uuid.uuid4()))
+
+#         if not user_prompt:
+#             return Response(
+#                 {"error": "user_prompt is required"}, 
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+
+#         def event_stream():
+#             try:
+#                 for update in run_workflow_streaming(user_prompt, thread_id):
+#                     # Format as Server-Sent Event
+#                     event_data = json.dumps(update)
+#                     yield f"data: {event_data}\n\n"
+                    
+#                     # Add small delay to prevent overwhelming the client
+#                     time.sleep(0.1)
+                    
+#                     # If interrupt, stop streaming and wait for resume
+#                     if update.get("type") == "interrupt":
+#                         break
+                        
+#             except Exception as e:
+#                 error_data = {
+#                     "type": "error",
+#                     "message": f"Streaming failed: {str(e)}",
+#                     "error": str(e)
+#                 }
+#                 yield f"data: {json.dumps(error_data)}\n\n"
+
+#         response = StreamingHttpResponse(
+#             event_stream(),
+#             content_type='text/event-stream'
+#         )
+#         response['Cache-Control'] = 'no-cache'
+#         response['Access-Control-Allow-Origin'] = '*'
+#         response['Access-Control-Allow-Headers'] = 'Cache-Control'
+        
+#         return response
+
+
+# class StreamingResumeView(APIView):
+#     def post(self, request):
+#         """
+#         Resume a streaming workflow with real-time updates.
+#         """
+#         data = request.data
+#         user_feedback = data.get("feedback")
+#         thread_id = request.query_params.get('thread_id')
+
+#         if not user_feedback:
+#             return Response(
+#                 {"error": "feedback is required"}, 
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+        
+#         if not thread_id:
+#             return Response(
+#                 {"error": "thread_id is required"}, 
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+
+#         def event_stream():
+#             try:
+#                 for update in resume_workflow_streaming(user_feedback, thread_id):
+#                     # Format as Server-Sent Event
+#                     event_data = json.dumps(update)
+#                     yield f"data: {event_data}\n\n"
+                    
+#                     # Add small delay to prevent overwhelming the client
+#                     time.sleep(0.1)
+                    
+#                     # If interrupt, stop streaming and wait for resume
+#                     if update.get("type") == "interrupt":
+#                         break
+                        
+#             except Exception as e:
+#                 error_data = {
+#                     "type": "error",
+#                     "message": f"Streaming resume failed: {str(e)}",
+#                     "error": str(e)
+#                 }
+#                 yield f"data: {json.dumps(error_data)}\n\n"
+
+#         response = StreamingHttpResponse(
+#             event_stream(),
+#             content_type='text/event-stream'
+#         )
+#         response['Cache-Control'] = 'no-cache'
+#         response['Access-Control-Allow-Origin'] = '*'
+#         response['Access-Control-Allow-Headers'] = 'Cache-Control'
+        
+#         return response

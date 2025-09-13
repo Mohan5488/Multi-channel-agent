@@ -1,0 +1,30 @@
+# Core agent + workflow engine
+langgraph>=0.2.25
+langchain>=0.2.12
+
+# LangChain subpackages (core types, community tools)
+langchain-core>=0.2.34
+langchain-community>=0.2.8
+
+# LLM bindings
+langchain-openai>=0.1.20
+# optional if you want Groq
+# langchain-groq>=0.1.4
+# groq>=0.6.0
+
+# Model Context Protocol (MCP) - Official Anthropic SDK
+mcp[cli]>=1.0.0
+
+# Utilities
+requests>=2.32.0
+python-dotenv>=1.0.1
+
+# Search tools
+tavily-python>=0.3.0
+
+pydantic>=2
+
+google-api-python-client>=2.140
+google-auth>=2.30
+google-auth-oauthlib>=1.2
+python-dateutil>=2.9
