@@ -2,10 +2,11 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.http import StreamingHttpResponse
-from src.agent.graph import run_workflow_api, resume_workflow_api #run_workflow_streaming, resume_workflow_streaming
+from src.agent.graph import run_workflow_api, resume_workflow_api #, run_workflow_streaming #resume_workflow_streaming
 import uuid
 import json
 import time
+import asyncio
 
 class PromptInputView(APIView):
     def post(self, request):
@@ -133,26 +134,40 @@ class ResumeWorkflowView(APIView):
 #             )
 
 #         def event_stream():
-#             try:
-#                 for update in run_workflow_streaming(user_prompt, thread_id):
-#                     # Format as Server-Sent Event
-#                     event_data = json.dumps(update)
-#                     yield f"data: {event_data}\n\n"
-                    
-#                     # Add small delay to prevent overwhelming the client
-#                     time.sleep(0.1)
-                    
-#                     # If interrupt, stop streaming and wait for resume
-#                     if update.get("type") == "interrupt":
-#                         break
+#             async def async_event_stream():
+#                 try:
+#                     async for update in run_workflow_streaming(user_prompt, thread_id):
+#                         # Format as Server-Sent Event
+#                         event_data = json.dumps(update)
+#                         yield f"data: {event_data}\n\n"
                         
-#             except Exception as e:
-#                 error_data = {
-#                     "type": "error",
-#                     "message": f"Streaming failed: {str(e)}",
-#                     "error": str(e)
-#                 }
-#                 yield f"data: {json.dumps(error_data)}\n\n"
+#                         # Add small delay to prevent overwhelming the client
+#                         await asyncio.sleep(0.1)
+                        
+#                         # If interrupt, stop streaming and wait for resume
+#                         if update.get("type") == "interrupt":
+#                             break
+                            
+#                 except Exception as e:
+#                     error_data = {
+#                         "type": "error",
+#                         "message": f"Streaming failed: {str(e)}",
+#                         "error": str(e)
+#                     }
+#                     yield f"data: {json.dumps(error_data)}\n\n"
+            
+#             # Convert async generator to regular generator
+#             loop = asyncio.new_event_loop()
+#             asyncio.set_event_loop(loop)
+#             try:
+#                 async_gen = async_event_stream()
+#                 while True:
+#                     try:
+#                         yield loop.run_until_complete(async_gen.__anext__())
+#                     except StopAsyncIteration:
+#                         break
+#             finally:
+#                 loop.close()
 
 #         response = StreamingHttpResponse(
 #             event_stream(),
@@ -163,6 +178,64 @@ class ResumeWorkflowView(APIView):
 #         response['Access-Control-Allow-Headers'] = 'Cache-Control'
         
 #         return response
+
+
+class ThreadHistoryView(APIView):
+    def get(self, request, thread_id):
+        """
+        Get conversation history for a specific thread_id.
+        """
+        if not thread_id:
+            return Response(
+                {"error": "thread_id is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            from src.agent.graph import create_workflow, serialize_state
+            
+            # Create workflow instance
+            app = create_workflow()
+            config = {"configurable": {"thread_id": thread_id}}
+            
+            # Get the current state from checkpoints
+            current_state = app.get_state(config)
+            
+            if not current_state or not current_state.values:
+                return Response({
+                    "thread_id": thread_id,
+                    "message": "No conversation history found for this thread",
+                    "history": [],
+                    "state": {}
+                })
+            
+            # Serialize the state for JSON response
+            serialized_state = serialize_state(current_state.values)
+            
+            # Extract messages from state
+            messages = current_state.values.get("messages", [])
+            
+            # Format messages for frontend
+            formatted_messages = []
+            for msg in messages:
+                formatted_messages.append({
+                    "type": msg.__class__.__name__,
+                    "content": msg.content if hasattr(msg, 'content') else str(msg),
+                })
+            
+            return Response({
+                "thread_id": thread_id,
+                "message": "Conversation history retrieved successfully",
+                "history": formatted_messages,
+                "state": serialized_state,
+                "total_messages": len(formatted_messages)
+            })
+            
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to retrieve history: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 # class StreamingResumeView(APIView):
@@ -217,3 +290,62 @@ class ResumeWorkflowView(APIView):
 #         response['Access-Control-Allow-Headers'] = 'Cache-Control'
         
 #         return response
+
+
+class ThreadHistoryView(APIView):
+    def get(self, request, thread_id):
+        """
+        Get conversation history for a specific thread_id.
+        """
+        if not thread_id:
+            return Response(
+                {"error": "thread_id is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            from src.agent.graph import create_workflow, serialize_state
+            
+            # Create workflow instance
+            app = create_workflow()
+            config = {"configurable": {"thread_id": thread_id}}
+            
+            # Get the current state from checkpoints
+            current_state = app.get_state(config)
+            
+            if not current_state or not current_state.values:
+                return Response({
+                    "thread_id": thread_id,
+                    "message": "No conversation history found for this thread",
+                    "history": [],
+                    "state": {}
+                })
+            
+            # Serialize the state for JSON response
+            serialized_state = serialize_state(current_state.values)
+            
+            # Extract messages from state
+            messages = current_state.values.get("messages", [])
+            
+            # Format messages for frontend
+            formatted_messages = []
+            for msg in messages:
+                formatted_messages.append({
+                    "type": msg.__class__.__name__,
+                    "content": msg.content if hasattr(msg, 'content') else str(msg),
+                    "timestamp": getattr(msg, 'timestamp', None)
+                })
+            
+            return Response({
+                "thread_id": thread_id,
+                "message": "Conversation history retrieved successfully",
+                "history": formatted_messages,
+                "state": serialized_state,
+                "total_messages": len(formatted_messages)
+            })
+            
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to retrieve history: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

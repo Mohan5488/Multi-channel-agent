@@ -37,7 +37,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "home", "api", "rest_framework"
+    "home", "api", "rest_framework", "corsheaders"
 ]
 
 MIDDLEWARE = [
@@ -48,7 +48,19 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    'corsheaders.middleware.CorsMiddleware',
 ]
+
+CSP_FRAME_ANCESTORS = ["'self'", "http://localhost:5173"]
+
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:5173',  # React app's address
+]
+
+CORS_ALLOW_CREDENTIALS = True
+
+CORS_ALLOW_ALL_ORIGINS = True 
+
 
 ROOT_URLCONF = "backend.urls"
 

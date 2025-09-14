@@ -7,7 +7,7 @@ from typing import Dict, Any
 from langgraph.graph import StateGraph, END
 from dotenv import load_dotenv
 from langgraph.types import Command
-
+import json
 # ✅ Persistent checkpointing
 import sqlite3
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -25,6 +25,7 @@ from src.agent.nodes.intent import intent_node
 from src.agent.nodes.compose_email import compose_email
 from src.agent.nodes.compose_linkedin import compose_linkedin
 from src.agent.nodes.human_gate import human_gate, _process_edits, process_linkedin_edits
+from langchain_core.messages import HumanMessage, AIMessageChunk, ToolMessage
 from src.agent.nodes.chat import chat_node
 from src.agent.nodes.send_email import send_email_node
 from src.agent.nodes.post_linkedin import post_linkedin_node
@@ -61,7 +62,7 @@ def create_workflow():
     # ✅ Compile with persistent SQLite checkpointer
     conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
     checkpointer = SqliteSaver(conn)
-    app = workflow.compile(checkpointer=memory)
+    app = workflow.compile(checkpointer=checkpointer)
     return app
 
 
@@ -131,6 +132,7 @@ def run_workflow_api(user_prompt: str, thread_id: str = "default") -> Dict[str, 
                      "user_prompt": user_prompt}
 
     for event in app.stream(pending_state, config):
+        print(event)
         if "__interrupt__" in event:
             # Return interrupt information for API handling
             intr = event["__interrupt__"][0]
@@ -183,40 +185,48 @@ def resume_workflow_api(user_feedback: str, thread_id: str = "default") -> Dict[
     return final_state.values
 
 
-# def serialize_state(state):
-#     """
-#     Serialize LangGraph state to JSON-safe format.
-#     """
-#     if not state:
-#         return {}
+def serialize_state(state):
+    """
+    Serialize LangGraph state to JSON-safe format.
+    """
+    if not state:
+        return {}
     
-#     serialized = {}
-#     for key, value in state.items():
-#         if key == "messages":
-#             # Convert messages to serializable format
-#             serialized[key] = [
-#                 {
-#                     "type": msg.__class__.__name__,
-#                     "content": msg.content if hasattr(msg, 'content') else str(msg)
-#                 }
-#                 for msg in value
-#             ]
-#         elif isinstance(value, (str, int, float, bool, type(None))):
-#             serialized[key] = value
-#         elif isinstance(value, (list, dict)):
-#             try:
-#                 # Try to serialize complex objects
-#                 serialized[key] = value
-#             except:
-#                 serialized[key] = str(value)
-#         else:
-#             # Convert other objects to string
-#             serialized[key] = str(value)
+    serialized = {}
+    for key, value in state.items():
+        if key == "messages":
+            # Convert messages to serializable format
+            serialized[key] = [
+                {
+                    "type": msg.__class__.__name__,
+                    "content": msg.content if hasattr(msg, 'content') else str(msg)
+                }
+                for msg in value
+            ]
+        elif isinstance(value, (str, int, float, bool, type(None))):
+            serialized[key] = value
+        elif isinstance(value, (list, dict)):
+            try:
+                # Try to serialize complex objects
+                serialized[key] = value
+            except:
+                serialized[key] = str(value)
+        else:
+            # Convert other objects to string
+            serialized[key] = str(value)
     
-#     return serialized
+    return serialized
+
+# def serialise_ai_message_chunk(chunk): 
+#     if(isinstance(chunk, AIMessageChunk)):
+#         return chunk.content
+#     else:
+#         raise TypeError(
+#             f"Object of type {type(chunk).__name__} is not correctly formatted for serialisation"
+#         )
 
 
-# def run_workflow_streaming(user_prompt: str, thread_id: str = "default"):
+# async def run_workflow_streaming(user_prompt: str, thread_id: str = "default"):
 #     """
 #     Generator that yields streaming updates for the workflow.
 #     Yields dictionaries with status updates, interrupts, and final results.
@@ -235,49 +245,44 @@ def resume_workflow_api(user_feedback: str, thread_id: str = "default") -> Dict[
 #     }
 
 #     try:
-#         for event in app.stream(pending_state, config):
-#             # Yield progress updates
-#             if "__interrupt__" in event:
-#                 intr = event["__interrupt__"][0]
-#                 payload = getattr(intr, "value", {}) or {}
-                
-#                 # Get current state and serialize it
-#                 current_state = app.get_state(config).values
-#                 serialized_state = serialize_state(current_state)
-                
-#                 yield {
-#                     "type": "interrupt",
-#                     "message": "Workflow interrupted - human input required",
-#                     "interrupt": {
-#                         "message": payload.get("message", "Please provide input"),
-#                         "preview": payload.get("preview"),
-#                         "thread_id": thread_id
-#                     },
-#                     "state": serialized_state
-#                 }
-#                 return  # Stop streaming on interrupt
+#         async for event in app.astream_events(pending_state, config):
+#             print(event)
+#             event_type = event["event"]
+#             if event_type == "on_chat_model_stream":
+#                 chunk_content = serialise_ai_message_chunk(event["data"]["chunk"])
+#                 safe_content = chunk_content.replace("'", "\\'").replace("\n", "\\n")
+#                 yield f"data: {{\"type\": \"content\", \"content\": \"{safe_content}\"}}\n\n"
             
-#             # Yield node completion updates
-#             for node_name, node_data in event.items():
-#                 if node_name != "__interrupt__":
-#                     yield {
-#                         "type": "node_complete",
-#                         "node": node_name,
-#                         "message": f"Completed {node_name}",
-#                         "data": serialize_state(node_data) if isinstance(node_data, dict) else str(node_data)
-#                     }
-
-#         # Workflow completed
-#         final_state = app.get_state(config)
-#         serialized_final_state = serialize_state(final_state.values)
+#             elif event_type == "on_chat_model_end":
+#                 # Check if there are tool calls for search
+#                 tool_calls = event["data"]["output"].tool_calls if hasattr(event["data"]["output"], "tool_calls") else []
+#                 search_calls = [call for call in tool_calls if call["name"] == "tavily_search_results_json"]
+                
+#                 if search_calls:
+#                     # Signal that a search is starting
+#                     search_query = search_calls[0]["args"].get("query", "")
+#                     # Escape quotes and special characters
+#                     safe_query = search_query.replace('"', '\\"').replace("'", "\\'").replace("\n", "\\n")
+#                     yield f"data: {{\"type\": \"search_start\", \"query\": \"{safe_query}\"}}\n\n"
+                    
+#             elif event_type == "on_tool_end" and event["name"] == "tavily_search_results_json":
+#                 # Search completed - send results or error
+#                 output = event["data"]["output"]
+                
+#                 # Check if output is a list 
+#                 if isinstance(output, list):
+#                     # Extract URLs from list of search results
+#                     urls = []
+#                     for item in output:
+#                         if isinstance(item, dict) and "url" in item:
+#                             urls.append(item["url"])
+                    
+#                     # Convert URLs to JSON and yield them
+#                     urls_json = json.dumps(urls)
+#                     yield f"data: {{\"type\": \"search_results\", \"urls\": {urls_json}}}\n\n"
         
-#         yield {
-#             "type": "complete",
-#             "message": "Workflow completed successfully",
-#             "result": final_state.values.get("result"),
-#             "state": serialized_final_state
-#         }
-
+#         # Send an end event
+#         yield f"data: {{\"type\": \"end\"}}\n\n"
 #     except Exception as e:
 #         yield {
 #             "type": "error",
