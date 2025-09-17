@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 
 export default function AgentChat() {
   const [query, setQuery] = useState('');
@@ -8,6 +9,8 @@ export default function AgentChat() {
   const [waitingForFeedback, setWaitingForFeedback] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const chatBoxRef = useRef(null);
+  const { id } = useParams();
+  const navigate = useNavigate();
 
   const handleChange = (e) => setQuery(e.target.value);
   const handleFeedbackChange = (e) => setFeedbackMessage(e.target.value);
@@ -17,6 +20,37 @@ export default function AgentChat() {
       handleSubmit(e);
     }
   };
+
+  console.log("ID OUTSIDE -", id)
+
+  useEffect(() => {
+    if (!id) {
+      setMessages([]);
+      setThreadId(null);
+    }
+  }, [id])
+
+  useEffect(()=>{
+    if (!id) return;
+    setThreadId(id)
+    const fetchData = async ()=>{
+      console.log("ID IN FUNCTION -", id)
+      const res = await fetch(`http://127.0.0.1:8000/v1/threads/${id}/history/`);
+      if (!res.ok) throw new Error('Failed to fetch data');
+
+      const response = await res.json();
+      console.log(response)
+      const history = Array.isArray(response?.history) ? response.history : [];
+      const normalized = history
+        .map((item) => ({
+          type: item?.type || (item?.role === 'user' ? 'HumanMessage' : 'AIMessage'),
+          content: String(item?.content ?? '')
+        }))
+        .filter((m) => m.type !== 'AIMessage' || m.content.trim() !== '');
+      setMessages(normalized)
+    }
+    fetchData()
+  }, [id])
 
   const handleFeedbackKeyDown = (e) => {
     if (e.key === 'Enter') {
@@ -35,7 +69,7 @@ export default function AgentChat() {
     e.preventDefault();
     if (!query.trim()) return;
 
-    setMessages((prev) => [...prev, { sender: 'user', text: query }]);
+    setMessages((prev) => [...prev, { type: 'HumanMessage', content: query }]);
     setLoading(true);
     setQuery('');
 
@@ -54,6 +88,9 @@ export default function AgentChat() {
 
       const response = await res.json();
       if (response.thread_id && !threadId) setThreadId(response.thread_id);
+      if (response.thread_id && !id) {
+        navigate(`/${response.thread_id}`);
+      }
 
       let botReply = '';
       let isInterrupt = false;
@@ -77,10 +114,12 @@ export default function AgentChat() {
         botReply = `${response.message || 'Workflow completed'}`;
       }
 
-      setMessages((prev) => [...prev, { sender: 'bot', text: botReply, isInterrupt }]);
+      if (String(botReply).trim() !== '') {
+        setMessages((prev) => [...prev, { type: 'AIMessage', content: botReply, isInterrupt }]);
+      }
     } catch (err) {
       console.error(err);
-      setMessages((prev) => [...prev, { sender: 'bot', text: 'Sorry, something went wrong. Please try again.' }]);
+      setMessages((prev) => [...prev, { type: 'AIMessage', content: 'Sorry, something went wrong. Please try again.' }]);
     }
 
     setLoading(false);
@@ -90,7 +129,7 @@ export default function AgentChat() {
     e.preventDefault();
     if (!feedbackMessage.trim() || !threadId) return;
 
-    setMessages((prev) => [...prev, { sender: 'user', text: `Feedback: ${feedbackMessage}` }]);
+    setMessages((prev) => [...prev, { type: 'HumanMessage', content: `Feedback: ${feedbackMessage}` }]);
     setLoading(true);
     setFeedbackMessage('');
     setWaitingForFeedback(false);
@@ -121,10 +160,12 @@ export default function AgentChat() {
         botReply = `🤖 ${response.message || 'Workflow completed'}`;
       }
 
-      setMessages((prev) => [...prev, { sender: 'bot', text: botReply, isInterrupt: response.status === 'interrupt' }]);
+      if (String(botReply).trim() !== '') {
+        setMessages((prev) => [...prev, { type : 'AIMessage', content: botReply, isInterrupt: response.status === 'interrupt' }]);
+      }
     } catch (err) {
       console.error(err);
-      setMessages((prev) => [...prev, { sender: 'bot', text: 'Sorry, something went wrong resuming the workflow.' }]);
+      setMessages((prev) => [...prev, { type: 'AIMessage', content: 'Sorry, something went wrong resuming the workflow.' }]);
     }
 
     setLoading(false);
@@ -132,11 +173,11 @@ export default function AgentChat() {
 
   // render helpers
   const renderBubble = (msg) => {
-    const text = String(msg.text);
-    const cls = `bubble ${msg.sender === 'user' ? 'bubble-user' : msg.isInterrupt ? 'bubble-interrupt' : 'bubble-bot'}`;
+    const content = String(msg.content);
+    const cls = `bubble ${msg.type === 'HumanMessage' ? 'bubble-user' : msg.isInterrupt ? 'bubble-interrupt' : 'bubble-bot'}`;
     
     // Split by line breaks and render each line
-    const lines = text.split('\n').map((line, index) => {
+    const lines = content.split('\n').map((line, index) => {
       // Handle empty lines
       if (line.trim() === '') {
         return <br key={index} />;
@@ -147,7 +188,7 @@ export default function AgentChat() {
     return <div className={cls}>{lines}</div>;
   };
 
-  const shouldShowLoading = loading && (messages.length === 0 || messages[messages.length - 1].sender === 'user');
+  const shouldShowLoading = loading && (messages.length === 0 || messages[messages.length - 1].type === 'HumanMessage');
 
   return (
     <div className="cgpt-bg">
@@ -175,8 +216,8 @@ export default function AgentChat() {
 
           <div className="msg-list">
             {messages.map((msg, idx) => (
-              <div key={idx} className={`msg ${msg.sender === 'user' ? 'msg-right' : 'msg-left'}`}>
-                {msg.sender !== 'user' && <div className="avatar">B</div>}
+              <div key={idx} className={`msg ${msg.content === 'HumanMessage' ? 'msg-right' : 'msg-left'}`}>
+                {msg.type !== 'HumanMessage' && <div className="avatar">B</div>}
                 {renderBubble(msg)}
               </div>
             ))}

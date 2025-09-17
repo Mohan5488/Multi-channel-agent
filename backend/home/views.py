@@ -7,6 +7,7 @@ import uuid
 import json
 import time
 import asyncio
+import sqlite3
 
 class PromptInputView(APIView):
     def post(self, request):
@@ -347,5 +348,65 @@ class ThreadHistoryView(APIView):
         except Exception as e:
             return Response(
                 {"error": f"Failed to retrieve history: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class ThreadsListView(APIView):
+    def get(self, request):
+        """
+        Return a list of distinct thread_ids from the LangGraph SQLite checkpointer.
+        """
+        try:
+            conn = sqlite3.connect("checkpoints.db")
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+
+            thread_ids = set()
+
+            # Try common LangGraph tables first
+            for table in ["checkpoints", "checkpoint_writes"]:
+                try:
+                    cur.execute(f"SELECT DISTINCT thread_id FROM {table}")
+                    rows = cur.fetchall()
+                    for r in rows:
+                        if r["thread_id"]:
+                            thread_ids.add(str(r["thread_id"]))
+                except Exception:
+                    # Table may not exist; continue to next strategy
+                    pass
+
+            # If still empty, discover any table that has a thread_id column
+            if not thread_ids:
+                cur.execute(
+                    """
+                    SELECT name FROM sqlite_master 
+                    WHERE type='table' AND name NOT LIKE 'sqlite_%'
+                    """
+                )
+                tables = [row[0] for row in cur.fetchall()]
+                for tbl in tables:
+                    try:
+                        cur.execute(f"PRAGMA table_info({tbl})")
+                        cols = [c[1] for c in cur.fetchall()]  # col names
+                        if "thread_id" in cols:
+                            cur.execute(f"SELECT DISTINCT thread_id FROM {tbl}")
+                            for r in cur.fetchall():
+                                if r[0]:
+                                    thread_ids.add(str(r[0]))
+                    except Exception:
+                        continue
+
+            conn.close()
+
+            
+
+            return Response({
+                "threads": thread_ids,
+                "count": len(thread_ids)
+            })
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to list threads: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )

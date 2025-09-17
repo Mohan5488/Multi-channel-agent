@@ -101,10 +101,15 @@ def chat_node(state):
             "- Use line breaks for readability but avoid complex formatting\n"
             "- For data, use simple lists instead of tables\n"
             "- Keep responses clean and easy to read in plain text"
+            "- If any *bold* to specify then Make it as CAPITAL instead of shwoing **bold**"
         )),
     )
 
-    input_messages = messages + [HumanMessage(content=user_prompt)]
+    # Avoid duplicating the latest HumanMessage; it's already injected via workflow input
+    if messages and isinstance(messages[-1], HumanMessage) and messages[-1].content == user_prompt:
+        input_messages = messages
+    else:
+        input_messages = messages + [HumanMessage(content=user_prompt)]
 
     response = react_agent.invoke({"messages" : input_messages})
 

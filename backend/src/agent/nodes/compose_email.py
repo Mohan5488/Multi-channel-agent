@@ -90,6 +90,17 @@ Output:
   "missing": []
 }
 
+Input:
+send mail to friend, that i will not come to college tmrw.
+Output:
+{
+  "to": "",
+  "subject": "",
+  "body": "i will not come to college tmrw",
+  "sender_name": "",
+  "missing": ["to","subject", "sender_name"]
+}
+
     """
  
    

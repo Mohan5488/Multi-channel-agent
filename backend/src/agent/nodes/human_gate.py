@@ -125,12 +125,31 @@ def process_linkedin_edits(state: Dict[str, Any]) -> Dict[str, Any]:
     edit_feedback = interrupt({"message": "What would you like to change? Describe your edits."})
 
     # llm = ChatOpenAI(model="gpt-4", temperature=0.3)
-    llm = ChatGroq(model = "llama-3.1-8b-instant", temperature = 0.7)
+    llm = ChatGroq(model = "openai/gpt-oss-120b", temperature = 0.7)
     current_text = state.get("generated_text", "")
 
-    system_prompt = f"""Edit the LinkedIn post based on human feedback.
+    system_prompt = f"""
+    You are an expert LinkedIn copy editor. Apply the user's edit request to the
+    current post and return the improved post text only.
+
+    Strict rules:
+    - Maintain the original intent; address the requested changes precisely
+    - Optimize for clarity, flow, and scannability (short paragraphs, clear lines)
+    - Use short sentences; prefer active voice
+    - You may use up to 3 concise bullet points only if it improves readability
+    - Keep length around 80–220 words unless the edit explicitly asks otherwise
+    - Use at most 0–2 relevant emojis, never more; avoid gimmicky tone
+    - Add up to 3 relevant hashtags at the very end only if they add value
+    - No markdown formatting (no **bold**, no code blocks), no titles or headers
+    - No salutations or signatures unless explicitly requested
+    - Keep URLs as-is; do not invent links
+    - Do not add prefaces like "Here is the edited post:" — return ONLY the final post
+
     Current LinkedIn post:
     {current_text}
+
+    User edit request:
+    {edit_feedback}
     """
     resp = llm.invoke([SystemMessage(content=system_prompt),
                        HumanMessage(content=f"Edit request: {edit_feedback}")])
