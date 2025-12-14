@@ -9,12 +9,13 @@ def send_email_node(state: Dict[str, Any]) -> Dict[str, Any]:
     to = (state.get("to") or "").strip()
     subject = (state.get("subject") or "No subject").strip()
     body = state.get("body") or ""
-
+    user_id = state.get("user_id") or ''
+  
     if not to:
         result = {"status": "error", "message": "Missing recipient email"}
         print("[SEND EMAIL] ERROR - ", result)
     else:
-        result = send_email_tool.invoke({"to": to, "subject": subject, "body": body})
+        result = send_email_tool.invoke({"to": to, "subject": subject, "body": body, "user_id" : user_id})
         print("[SEND EMAIL] RESULT - ", result)
     status = result.get("status")
     message = result.get("message", "")

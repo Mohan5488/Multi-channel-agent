@@ -2,3 +2,9 @@
 env/
 client_secret.json
 *.json
+backend/home/credentials.json
+backend/calendar_tokens/1.json
+backend/src/agent/nodes/client_secret.json
+backend/tokens
+*.sqlite3
+backend/db.sqlite3

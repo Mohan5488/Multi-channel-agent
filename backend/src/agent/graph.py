@@ -29,6 +29,7 @@ from langchain_core.messages import HumanMessage, AIMessageChunk, ToolMessage
 from src.agent.nodes.chat import chat_node
 from src.agent.nodes.send_email import send_email_node
 from src.agent.nodes.post_linkedin import post_linkedin_node
+from src.agent.nodes.compose_cal_events import compose_events
 
 
 def create_workflow():
@@ -41,6 +42,7 @@ def create_workflow():
     workflow.add_node("intent", intent_node)
     workflow.add_node("compose_email", compose_email)
     workflow.add_node("compose_linkedin", compose_linkedin)
+    workflow.add_node("calendar", compose_events)
     workflow.add_node("post_linkedin", post_linkedin_node)
     workflow.add_node("human_gate", human_gate)
     workflow.add_node("edits", _process_edits)
@@ -122,7 +124,7 @@ def run_workflow_interactive(user_prompt: str, thread_id: str = "default") -> Di
             return final_state.values
 
 
-def run_workflow_api(user_prompt: str, thread_id: str = "default") -> Dict[str, Any]:
+def run_workflow_api(user_prompt: str, user_id : int, thread_id: str = "default") -> Dict[str, Any]:
     """
     Run workflow for API endpoints - returns interrupt state instead of blocking for input.
     """
@@ -130,7 +132,7 @@ def run_workflow_api(user_prompt: str, thread_id: str = "default") -> Dict[str, 
     config = {"configurable": {"thread_id": thread_id}}
 
     pending_state = {"messages": [HumanMessage(content=user_prompt)],
-                     "user_prompt": user_prompt}
+                     "user_prompt": user_prompt, "user_id" : user_id}
 
     for event in app.stream(pending_state, config):
         print(event)
@@ -159,11 +161,16 @@ def resume_workflow_api(user_feedback: str, thread_id: str = "default") -> Dict[
     Resume workflow after receiving human feedback via API.
     """
     app = create_workflow()
+    print(f"[RESUME] THREAD ID-", thread_id)
     config = {"configurable": {"thread_id": thread_id}}
 
+    print("[RESUME] USER FEEDBACK -", user_feedback)
+
+    print("[RESUME] Resuming Feedback")
     # Resume with the feedback
     app.invoke(Command(resume=user_feedback), config=config)
 
+    print("[RESUME] Resume Feedback Done")
     # Continue streaming to check for more interrupts or completion
     for event in app.stream(None, config):
         if "__interrupt__" in event:

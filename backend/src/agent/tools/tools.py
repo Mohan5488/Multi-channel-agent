@@ -1,54 +1,87 @@
-
 import os
 import requests
 from email.mime.text import MIMEText
 import smtplib
 from dotenv import load_dotenv
 load_dotenv()
-
-# Prefer legacy import path; fall back to core
 try:
     from langchain.tools import tool
 except Exception:
     from langchain_core.tools import tool
 
 
-@tool("send_email")
-def send_email_tool(to: str, subject: str, body: str) -> dict:
-    """
-    Send a plain-text email via SMTP.
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from email.mime.text import MIMEText
+import base64
+import os
+import json
+from ..utility_cred.creds import ensure_valid_and_persist
 
-    Env required:
-      - SENDER_EMAIL
-      - SMTP_APP_PASSWORD  (e.g., Gmail App Password)
-    Optional:
-      - SMTP_SERVER (default: smtp.gmail.com)
-      - SMTP_PORT   (default: 587)
-    """
-    print("[SEND_EMAIL_TOOL] Sending email to", to, subject, body)
-    SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-    SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-    SENDER_EMAIL = os.getenv("SENDER_EMAIL")
-    APP_PASSWORD = os.getenv("SMTP_APP_PASSWORD")
+@tool("send_mail")
+def send_email_tool(to: str, subject: str, body: str, user_id: int = None) -> dict:
+    '''
+        send mail using oauth credentials
+    '''
+    if not user_id:
+        return {"status": "error", "message": "user_id is required"}
 
-    if not SENDER_EMAIL or not APP_PASSWORD:
-        return {"status": "error", "message": "Missing SENDER_EMAIL or SMTP_APP_PASSWORD"}
+    service_name = "gmail"
+    creds = ensure_valid_and_persist(user_id, service_name)
+    if not creds:
+        return {"status": "error", "message": "no credentials found for user/service"}
 
     try:
-        msg = MIMEText(body or "")
-        msg["Subject"] = subject or "(no subject)"
-        msg["From"] = SENDER_EMAIL
-        msg["To"] = to
+        service = build("gmail", "v1", credentials=creds)
 
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SENDER_EMAIL, APP_PASSWORD)
-            server.send_message(msg)
+        msg = MIMEText(body)
+        msg["to"] = to
+        msg["from"] = "me"
+        msg["subject"] = subject
 
-        return {"status": "success", "message": f"Email sent to {to}"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
 
+        sent = service.users().messages().send(
+            userId="me", 
+            body={"raw": raw}
+        ).execute()
+
+        return {"status":"success", "message": sent.get("id")}
+
+    except Exception as exc:
+        return {"status":"error", "message": str(exc)}
+
+@tool("set_event")
+def set_event_tool(summary, description, start, end, user_id):
+    """
+        Creates an event in calender using OAuth connectivity.
+    """
+    service_name = "google_calendar"
+    creds = ensure_valid_and_persist(user_id, service_name)
+
+    if not creds:
+        return {"status": "error", "message": "no credentials found for user/service"}
+    try:
+        service = build('calendar', 'v3', credentials=creds)
+        print("[CALENDER SERVICE BUILD")
+
+        event = {
+            'summary': summary,
+            'description': description,
+            'start': {'dateTime': start, 'timeZone': 'UTC+5:30'},
+            'end': {'dateTime': end, 'timeZone': 'UTC+5:30'},
+        }
+        print("[CALENDER] EVENT SENDING .......")
+
+        event = service.events().insert(calendarId='primary', body=event).execute()
+        print("[CALENDER EVENT SEND SUCCESSFULLY")
+        return {"status": "success", "message": event.get("id")}
+    except Exception as exc:
+            return {"status":"error", "message": str(exc)}
 
 @tool("post_linkedin_text")
 def post_linkedin_text(text: str) -> dict:

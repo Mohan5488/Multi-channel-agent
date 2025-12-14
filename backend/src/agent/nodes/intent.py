@@ -11,19 +11,20 @@ from langgraph.types import Command
 
 def detect_intent(state: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Detect user intent: email or linkedin or general chat.
+    Detect user intent: email, linkedin, chat, or calendar event.
     """
     
     # llm = ChatOpenAI(model="gpt-4", temperature=0.1)
     llm = ChatGroq(model="openai/gpt-oss-120b")
     
-    system_prompt = """Classify the user's request into one of: email, linkedin, chat.
+    system_prompt = """Classify the user's request into one of: email, linkedin, chat, calendar.
 
 - email: composing/sending an email, mentions email, mail, reply, forward, @address, etc.
 - linkedin: posting to LinkedIn, share on LinkedIn, LinkedIn post, etc.
 - chat: everything else (jokes, Q&A, small talk, general tasks).
+- calendar: creating or scheduling events, meetings, reminders, appointments, adding to calendar, etc.
 
-Respond with ONLY one token: email | linkedin | chat
+Respond with ONLY one token: email | linkedin | chat | calendar
 """
 
     user_prompt = state.get("user_prompt", "")
@@ -41,15 +42,19 @@ Respond with ONLY one token: email | linkedin | chat
         intent = "email"
     elif "linkedin" in intent:
         intent = "linkedin"
+    elif "calendar" in intent:
+        intent = "calendar"
     elif "chat" in intent:
         intent = "chat"
     else:
         # Fallback to keyword detection
         prompt_lower = user_prompt.lower()
-        if any(word in prompt_lower for word in ["email", "@", "send to"]):
+        if any(word in prompt_lower for word in ["email", "@", "send to", "mail"]):
             intent = "email"
         elif any(word in prompt_lower for word in ["linkedin", "post", "share"]):
             intent = "linkedin"
+        elif any(word in prompt_lower for word in ["meeting", "schedule", "calendar", "reminder", "appointment"]):
+            intent = "calendar"
         else:
             intent = "chat"  # Default
     
@@ -72,6 +77,8 @@ def intent_node(state: Dict[str, Any]) -> Dict[str, Any]:
         return Command(goto="compose_linkedin", update=state)
     elif state.get("intent") == "chat":
         return Command(goto="chat", update=state)
+    elif state.get('intent') == "calendar":
+        return Command(goto="calendar")
     else:
         # Default to email
         state["intent"] = "chat"

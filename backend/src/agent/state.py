@@ -3,10 +3,12 @@ from typing_extensions import Annotated
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 
+
 class AgentState(TypedDict, total=False):
     """
     Minimal state for email + chat + LinkedIn with HITL.
     """
+    user_id: int
 
     # Conversation history (persist via reducer)
     messages: Annotated[List[AnyMessage], add_messages]
@@ -33,6 +35,16 @@ class AgentState(TypedDict, total=False):
     tone: Optional[Literal["professional","conversational","thought_leadership"]]
     length: Optional[Literal["short","medium","long"]]
     audience: Optional[str]            # e.g. "deep-tech founders", "investors"
+
+    # ----- Calendar (events) -----
+    calendar_summary: Optional[str]       # Event title
+    calendar_description: Optional[str]   # Event description
+    calendar_start: Optional[str]         # ISO 8601 start datetime
+    calendar_end: Optional[str]           # ISO 8601 end datetime
+    calendar_timezone: Optional[str]      # e.g., "Asia/Kolkata"
+    calendar_location: Optional[str]      # optional event location
+    calendar_attendees: Optional[List[str]] # optional list of emails
+
 
     # ----- UI / Human-in-the-loop -----
     preview: Optional[str]
@@ -69,4 +81,12 @@ def create_initial_state(user_prompt: str) -> AgentState:
         "tone": "professional",
         "length": "medium",
         "audience": None,
+
+        "calendar_summary": None,
+        "calendar_description": None,
+        "calendar_start": None,
+        "calendar_end": None,
+        "calendar_timezone": "Asia/Kolkata",
+        "calendar_location": None,
+        "calendar_attendees": [],
     }

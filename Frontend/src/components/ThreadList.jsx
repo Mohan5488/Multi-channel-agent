@@ -6,10 +6,18 @@ export default function ThreadList() {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
   const { id } = useParams();
+  const Token = localStorage.getItem("token")
 
   const refresh = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/v1/threads/');
+      const res = await fetch('http://127.0.0.1:8000/v1/threads/',{
+        method: 'GET',
+        headers: { 
+          'Content-Type': 'application/json',
+          "Authorization": `Token ${Token}`,
+        },
+      }
+      );
       const data = await res.json();
       setThreads(Array.isArray(data?.threads) ? data.threads : []);
     } catch (e) {
@@ -51,7 +59,7 @@ export default function ThreadList() {
       <div style={{ padding: 14, borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', gap: 8 }}>
         <div style={{ fontWeight: 700, color: '#0b1220', flex: 1 }}>Threads</div>
         <button onClick={refresh} title="Refresh" style={{ border: '1px solid #e5e7eb', background: '#fff', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', fontSize: 12 }}>↻</button>
-        <Link to="/" style={{ fontSize: 12, marginLeft: 4, textDecoration: 'none', background: '#4f46e5', color: '#fff', padding: '4px 8px', borderRadius: 6 }}>New</Link>
+        <Link to="/chat" style={{ fontSize: 12, marginLeft: 4, textDecoration: 'none', background: '#4f46e5', color: '#fff', padding: '4px 8px', borderRadius: 6 }}>New</Link>
       </div>
       <div style={{ padding: 10, borderBottom: '1px solid #e5e7eb' }}>
         <input
@@ -73,7 +81,7 @@ export default function ThreadList() {
               return (
                 <li key={tid}>
                   <Link
-                    to={`/${tid}`}
+                    to={`/chat/${tid}`}
                     style={{
                       display: 'flex',
                       alignItems: 'center',

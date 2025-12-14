@@ -1,15 +1,144 @@
+import os
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1" 
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from django.http import StreamingHttpResponse
-from src.agent.graph import run_workflow_api, resume_workflow_api #, run_workflow_streaming #resume_workflow_streaming
+from django.shortcuts import redirect
+from django.http import JsonResponse, HttpResponse
+from google_auth_oauthlib.flow import Flow
+from googleapiclient.discovery import build
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from django.shortcuts import redirect
+from google_auth_oauthlib.flow import Flow
+from googleapiclient.errors import HttpError
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from django.contrib.auth.models import User
+from django.contrib.auth import authenticate
+from rest_framework.authtoken.models import Token
+from django.dispatch import receiver
+from allauth.account.signals import user_logged_in
+from rest_framework.authentication import TokenAuthentication
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny
+from .serializer import LoginSerializer, RegisterSerializer, UserDetailsSerializer
+from .models import ServiceCredential
+from email.mime.text import MIMEText
+from src.agent.graph import run_workflow_api, resume_workflow_api
+import base64
 import uuid
-import json
-import time
-import asyncio
 import sqlite3
+import os, json
+class LoginView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        objs = User.objects.all()
+        serializer = UserDetailsSerializer(objs, many=True)
+        return Response({"data":serializer.data})
+    
+    def post(self, request):
+        data = request.data
+        serializer = LoginSerializer(data = data)
+
+        if serializer.is_valid():
+            username, password = serializer.validated_data['username'], serializer.validated_data['password']
+
+            user = authenticate(username=username, password=password)
+            print(user)
+
+            if user:
+                token, _ = Token.objects.get_or_create(user=user)
+
+                return Response({
+                    "message": "Login successful",
+                    "token": token.key,
+                    "user_id": user.id,
+                    "username": user.username
+                }, status=status.HTTP_200_OK)
+            return Response({"message": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+from allauth.socialaccount.providers.google.views import GoogleOAuth2Adapter
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.authtoken.models import Token
+from allauth.socialaccount.providers.oauth2.client import OAuth2Client
+from dj_rest_auth.registration.views import SocialLoginView
+from allauth.socialaccount.models import SocialAccount
+
+from django.utils.timezone import now
+class GoogleLoginCallbackView(APIView):
+    def get(self, request):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response({'error': 'User not authenticated'}, status=401)
+
+        token, _ = Token.objects.get_or_create(user=user)
+        user.last_login = now()
+        user.save(update_fields=['last_login'])
+
+        # Optional: tag the session
+        social_account = SocialAccount.objects.filter(user=user, provider='google').first()
+        extra_data = social_account.extra_data if social_account else {}
+
+        return Response({
+            'message': 'Google login successful',
+            'username': user.username,
+            'token': token.key,
+            'user_id': user.id,
+            'email': user.email,
+            'google_info': extra_data,  # Add the full Google profile data
+        })
+
+@receiver(user_logged_in)
+def create_auth_token(request, user, **kwargs):
+    token, created = Token.objects.get_or_create(user=user)
+    print("API Token:", token.key)
+
+@receiver(user_logged_in)
+def return_token_json(request, user, **kwargs):
+    token, _ = Token.objects.get_or_create(user=user)
+    print("LOGIN JSON API TOKEN RECIEVER -", token)
+    return JsonResponse({
+        "token": token.key,
+        "username": user.username,
+        "email": user.email
+    })
+
+class RegisterUser(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        data = request.data
+        serializer = RegisterSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+               "message" : "User created",
+               "status" : True,
+               "data" : serializer.validated_data
+           }, status=status.HTTP_201_CREATED)
+        return Response({
+               "message" : serializer.errors,
+               "status" : False
+           }, status=status.HTTP_400_BAD_REQUEST)
+        
+    def get(self, request):
+        objs = User.objects.all()
+        serializer = RegisterSerializer(objs, many=True)
+        return Response(serializer.data) 
+
+
 
 class PromptInputView(APIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [TokenAuthentication]
+
     def post(self, request):
         """
         Start a new workflow or continue an existing one.
@@ -17,6 +146,9 @@ class PromptInputView(APIView):
         data = request.data
         user_prompt = data.get("user_prompt")
         thread_id = request.query_params.get('thread_id', str(uuid.uuid4()))
+        user_id = request.user.id
+
+        print(user_id)
 
         if not user_prompt:
             return Response(
@@ -25,7 +157,7 @@ class PromptInputView(APIView):
             )
 
         try:
-            result = run_workflow_api(user_prompt, thread_id)
+            result = run_workflow_api(user_prompt, user_id, thread_id)
             
             # Check if workflow was interrupted
             if result.get("status") == "interrupt":
@@ -62,6 +194,9 @@ class PromptInputView(APIView):
 
 
 class ResumeWorkflowView(APIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [TokenAuthentication]
+
     def post(self, request):
         """
         Resume a workflow after providing human feedback.
@@ -118,70 +253,11 @@ class ResumeWorkflowView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-
-# class StreamingWorkflowView(APIView):
-#     def post(self, request):
-#         """
-#         Start a streaming workflow with real-time updates via Server-Sent Events.
-#         """
-#         data = request.data
-#         user_prompt = data.get("user_prompt")
-#         thread_id = request.query_params.get('thread_id', str(uuid.uuid4()))
-
-#         if not user_prompt:
-#             return Response(
-#                 {"error": "user_prompt is required"}, 
-#                 status=status.HTTP_400_BAD_REQUEST
-#             )
-
-#         def event_stream():
-#             async def async_event_stream():
-#                 try:
-#                     async for update in run_workflow_streaming(user_prompt, thread_id):
-#                         # Format as Server-Sent Event
-#                         event_data = json.dumps(update)
-#                         yield f"data: {event_data}\n\n"
-                        
-#                         # Add small delay to prevent overwhelming the client
-#                         await asyncio.sleep(0.1)
-                        
-#                         # If interrupt, stop streaming and wait for resume
-#                         if update.get("type") == "interrupt":
-#                             break
-                            
-#                 except Exception as e:
-#                     error_data = {
-#                         "type": "error",
-#                         "message": f"Streaming failed: {str(e)}",
-#                         "error": str(e)
-#                     }
-#                     yield f"data: {json.dumps(error_data)}\n\n"
-            
-#             # Convert async generator to regular generator
-#             loop = asyncio.new_event_loop()
-#             asyncio.set_event_loop(loop)
-#             try:
-#                 async_gen = async_event_stream()
-#                 while True:
-#                     try:
-#                         yield loop.run_until_complete(async_gen.__anext__())
-#                     except StopAsyncIteration:
-#                         break
-#             finally:
-#                 loop.close()
-
-#         response = StreamingHttpResponse(
-#             event_stream(),
-#             content_type='text/event-stream'
-#         )
-#         response['Cache-Control'] = 'no-cache'
-#         response['Access-Control-Allow-Origin'] = '*'
-#         response['Access-Control-Allow-Headers'] = 'Cache-Control'
-        
-#         return response
-
-
 class ThreadHistoryView(APIView):
+
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [TokenAuthentication]
+
     def get(self, request, thread_id):
         """
         Get conversation history for a specific thread_id.
@@ -238,62 +314,11 @@ class ThreadHistoryView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-
-# class StreamingResumeView(APIView):
-#     def post(self, request):
-#         """
-#         Resume a streaming workflow with real-time updates.
-#         """
-#         data = request.data
-#         user_feedback = data.get("feedback")
-#         thread_id = request.query_params.get('thread_id')
-
-#         if not user_feedback:
-#             return Response(
-#                 {"error": "feedback is required"}, 
-#                 status=status.HTTP_400_BAD_REQUEST
-#             )
-        
-#         if not thread_id:
-#             return Response(
-#                 {"error": "thread_id is required"}, 
-#                 status=status.HTTP_400_BAD_REQUEST
-#             )
-
-#         def event_stream():
-#             try:
-#                 for update in resume_workflow_streaming(user_feedback, thread_id):
-#                     # Format as Server-Sent Event
-#                     event_data = json.dumps(update)
-#                     yield f"data: {event_data}\n\n"
-                    
-#                     # Add small delay to prevent overwhelming the client
-#                     time.sleep(0.1)
-                    
-#                     # If interrupt, stop streaming and wait for resume
-#                     if update.get("type") == "interrupt":
-#                         break
-                        
-#             except Exception as e:
-#                 error_data = {
-#                     "type": "error",
-#                     "message": f"Streaming resume failed: {str(e)}",
-#                     "error": str(e)
-#                 }
-#                 yield f"data: {json.dumps(error_data)}\n\n"
-
-#         response = StreamingHttpResponse(
-#             event_stream(),
-#             content_type='text/event-stream'
-#         )
-#         response['Cache-Control'] = 'no-cache'
-#         response['Access-Control-Allow-Origin'] = '*'
-#         response['Access-Control-Allow-Headers'] = 'Cache-Control'
-        
-#         return response
-
-
 class ThreadHistoryView(APIView):
+
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [TokenAuthentication]
+
     def get(self, request, thread_id):
         """
         Get conversation history for a specific thread_id.
@@ -353,6 +378,9 @@ class ThreadHistoryView(APIView):
 
 
 class ThreadsListView(APIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [TokenAuthentication]
+
     def get(self, request):
         """
         Return a list of distinct thread_ids from the LangGraph SQLite checkpointer.
@@ -410,3 +438,173 @@ class ThreadsListView(APIView):
                 {"error": f"Failed to list threads: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+SCOPES = [
+    "https://www.googleapis.com/auth/gmail.send",
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",  # optional
+    "https://www.googleapis.com/auth/calendar",
+]
+REDIRECT_URI = "http://127.0.0.1:8000/v1/oauth2callback"
+
+class ConnectGmailView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        user_id = request.data.get("user_id")
+        print(user_id)
+        flow = Flow.from_client_secrets_file(
+            'src/agent/nodes/client_secret.json',
+            scopes=SCOPES,
+            redirect_uri=REDIRECT_URI
+        )
+
+        state = json.dumps({'user_id': user_id})
+        auth_url, _ = flow.authorization_url(
+            access_type='offline', 
+            include_granted_scopes=False,
+            prompt='consent',     
+            state=state
+        )
+
+        print("auth_url-",auth_url)
+        return Response({"auth_url": auth_url})
+
+class OAuth2CallbackView(APIView):
+    permission_classes = [AllowAny]
+    def get(self, request):
+        state = json.loads(request.GET.get("state", "{}"))
+        print(state)
+        user_id = state.get("user_id")
+
+        flow = Flow.from_client_secrets_file(
+            'src/agent/nodes/client_secret.json',
+            scopes=SCOPES,
+            redirect_uri=REDIRECT_URI
+        )
+        flow.fetch_token(authorization_response=request.build_absolute_uri())
+        creds = flow.credentials
+
+        ServiceCredential.objects.update_or_create(
+            user_id=user_id,
+            service="gmail",
+            defaults={
+                "data": {
+                    "token": creds.token,
+                    "refresh_token": creds.refresh_token,
+                    "token_uri": creds.token_uri,
+                    "client_id": creds.client_id,
+                    "client_secret": creds.client_secret,
+                    "scopes": creds.scopes,
+                    "expiry": creds.expiry.isoformat() if creds.expiry else None
+                }
+            }
+        )
+
+        # return Response({"status": "success", "message": "Gmail connected!"})
+        return redirect("http://localhost:5173/test")
+
+REDIRECT_URI_CALENDER = "http://127.0.0.1:8000/v1/oauth2callback_calender"
+
+class ConnectCalendarView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        user_id = request.data.get("user_id")
+        flow = Flow.from_client_secrets_file(
+            'src/agent/nodes/calender/credentials.json',
+            scopes=SCOPES,
+            redirect_uri=REDIRECT_URI_CALENDER
+        )
+
+        state = json.dumps({'user_id': user_id})
+        auth_url, _ = flow.authorization_url(
+            access_type='offline',     # request refresh token
+            include_granted_scopes=False,
+            prompt='consent',
+            state=state
+        )
+        print("AUTHORIZATION URL CREATED")
+        print("auth_url-",auth_url)
+        return Response({"auth_url": auth_url})
+
+
+class CalendarOAuth2CallbackView(APIView):
+    def get(self, request):
+        state = json.loads(request.GET.get("state", "{}"))
+        user_id = state.get("user_id")
+
+        flow = Flow.from_client_secrets_file(
+            'src/agent/nodes/calender/credentials.json',
+            scopes=SCOPES,
+            redirect_uri=REDIRECT_URI_CALENDER
+        )
+
+        flow.fetch_token(authorization_response=request.build_absolute_uri())
+        creds = flow.credentials
+
+        ServiceCredential.objects.update_or_create(
+            user_id=user_id,
+            service="google_calendar",
+            defaults={
+                "data": {
+                    "token": creds.token,
+                    "refresh_token": creds.refresh_token,
+                    "token_uri": creds.token_uri,
+                    "client_id": creds.client_id,
+                    "client_secret": creds.client_secret,
+                    "scopes": creds.scopes,
+                    "expiry": creds.expiry.isoformat() if creds.expiry else None
+                }
+            }
+        )
+
+        return redirect("http://localhost:5173/test?status=success&service=calendar")
+
+
+TOKEN_DIR = "calendar_tokens"
+
+def load_calendar_credentials(user_id):
+    path = os.path.join(TOKEN_DIR, f"{user_id}.json")
+    if not os.path.exists(path):
+        return None
+    data = json.load(open(path))
+    creds = Credentials(
+        token=data.get("token"),
+        refresh_token=data.get("refresh_token"),
+        token_uri=data.get("token_uri"),
+        client_id=data.get("client_id"),
+        client_secret=data.get("client_secret"),
+        scopes=data.get("scopes")
+    )
+    return creds
+
+def ensure_valid(creds):
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+    return creds
+
+from googleapiclient.discovery import build
+from rest_framework.views import APIView
+
+class CreateEventView(APIView):
+    def post(self, request):
+        user_id = 1
+        creds = load_calendar_credentials(user_id)
+        if not creds:
+            return Response({"status": "error", "message": "User not connected."})
+
+        creds = ensure_valid(creds)
+        service = build('calendar', 'v3', credentials=creds)
+
+        event = {
+            'summary': request.data.get("summary", "Test Event"),
+            'description': request.data.get("description", ""),
+            'start': {'dateTime': request.data.get("start"), 'timeZone': 'UTC+5:30'},
+            'end': {'dateTime': request.data.get("end"), 'timeZone': 'UTC+5:30'},
+        }
+
+        event = service.events().insert(calendarId='primary', body=event).execute()
+        return Response({"status": "success", "event_id": event.get("id")})
